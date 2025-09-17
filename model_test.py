@@ -3,7 +3,9 @@ import torch
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 import os
-
+from torch.utils.tensorboard import SummaryWriter
+import torchvision
+import numpy as np
 
 def test_data_process_folder(data_root: str = './hymenoptera_data'):
     input_size = 224
@@ -24,6 +26,9 @@ def test_model_process(model,test_data, device):
     model.eval()
     batch_count = 0
     total_batches = len(test_data)
+    writer = SummaryWriter(log_dir="runs/test_misclassified")
+    mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
     
     print(f"开始测试，总共有 {total_batches} 个批次...")
     
@@ -50,38 +55,19 @@ def test_model_process(model,test_data, device):
                     result_name = test_data.dataset.classes[result] if hasattr(test_data.dataset, 'classes') else str(result)
                     status = "✓" if label == result else "✗"
                     print(f"  样本 {i+1}: 标签={label_name}({label}), 预测={result_name}({result}) {status}")
-    # INSERT_YOUR_CODE
-    # 将错误预测的样本显示到TensorBoard
-    if batch_count == 1:
-        from torch.utils.tensorboard import SummaryWriter
-        import torchvision
-        writer = SummaryWriter(log_dir='./runs/test_wrong_samples')
-        wrong_images = []
-        wrong_labels = []
-        wrong_preds = []
-        wrong_indices = []
-    # 收集错误样本
-    wrong_mask = (pre_label != b_y)
-    if wrong_mask.any():
-        wrong_idx = torch.nonzero(wrong_mask).squeeze().cpu().tolist()
-        if isinstance(wrong_idx, int):
-            wrong_idx = [wrong_idx]
-        for idx in wrong_idx:
-            wrong_images.append(b_x[idx].cpu())
-            wrong_labels.append(b_y[idx].cpu().item())
-            wrong_preds.append(pre_label[idx].cpu().item())
-            wrong_indices.append(idx + (batch_count-1)*test_data.batch_size if hasattr(test_data, 'batch_size') else idx)
-    # 在最后一个批次后写入TensorBoard
-    if batch_count == total_batches:
-        if len(wrong_images) > 0:
-            img_grid = torchvision.utils.make_grid(wrong_images, nrow=5, normalize=True, scale_each=True)
-            writer.add_image('Wrong Predictions', img_grid, 0)
-            # 添加标签和预测到文本
-            for i, (label, pred, idx) in enumerate(zip(wrong_labels, wrong_preds, wrong_indices)):
-                label_name = test_data.dataset.classes[label] if hasattr(test_data.dataset, 'classes') else str(label)
-                pred_name = test_data.dataset.classes[pred] if hasattr(test_data.dataset, 'classes') else str(pred)
-                writer.add_text('Wrong Sample Info', f"样本索引: {idx}, 标签: {label_name}({label}), 预测: {pred_name}({pred})", i)
-        writer.close()
+
+            # 将预测错误的样本写入 TensorBoard（简单网格展示）
+            mis_mask = pre_label != b_y
+            if mis_mask.any():
+                mis_idx = torch.nonzero(mis_mask, as_tuple=False).squeeze(1)
+                # 最多记录前 8 张，避免过多图片
+                mis_idx = mis_idx[:8]
+                imgs = b_x[mis_idx]
+                # 反标准化到 [0,1] 区间以便显示
+                imgs_denorm = imgs * std + mean
+                imgs_denorm = torch.clamp(imgs_denorm, 0.0, 1.0)
+                grid = torchvision.utils.make_grid(imgs_denorm, nrow=4)
+                writer.add_image("misclassified", grid, global_step=batch_count)
 
     test_avd_acc=test_acc/test_num
     print(f"\n=== 测试完成 ===")
@@ -89,6 +75,7 @@ def test_model_process(model,test_data, device):
     print(f"测试准确率: {test_avd_acc:.4f}")
     print(f"正确预测数: {test_acc.item()}")
     print(f"错误预测数: {test_num - test_acc.item()}")
+    writer.close()
 
 if  __name__ =="__main__":
     # 设置设备
